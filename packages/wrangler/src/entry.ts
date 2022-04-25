@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
 import { execaCommand } from "execa";
@@ -24,19 +24,33 @@ export async function getEntry(
 ): Promise<Entry> {
   let file: string;
   let directory = process.cwd();
+  let isSiteEntryPoint = false;
   if (args.script) {
     // If the script name comes from the command line it is relative to the current working directory.
     file = path.resolve(args.script);
   } else if (config.main === undefined) {
-    throw new Error(
-      `Missing entry-point: The entry-point should be specified via the command line (e.g. \`wrangler ${command} path/to/script\`) or the \`main\` config field.`
-    );
+    if (config.site?.["entry-point"]) {
+      isSiteEntryPoint = true;
+      directory = path.resolve(path.dirname(config.configPath ?? "."));
+      file = config.site?.["entry-point"];
+    } else {
+      throw new Error(
+        `Missing entry-point: The entry-point should be specified via the command line (e.g. \`wrangler ${command} path/to/script\`) or the \`main\` config field.`
+      );
+    }
   } else {
     directory = path.resolve(path.dirname(config.configPath ?? "."));
     file = path.resolve(directory, config.main);
   }
 
   await runCustomBuild(file, config.build);
+
+  if (isSiteEntryPoint) {
+    // site.entry-point could be a directory
+    if (existsSync(file) && lstatSync(file).isDirectory()) {
+      file = path.resolve(file, "index.js");
+    }
+  }
 
   if (fileExists(file) === false) {
     throw new Error(
