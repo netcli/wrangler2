@@ -11,6 +11,7 @@ import {
   unsetMockFetchKVGetValues,
 } from "./helpers/mock-cfetch";
 import { mockConsoleMethods } from "./helpers/mock-console";
+import { useMockIsTTY } from "./helpers/mock-istty";
 import { mockKeyListRequest } from "./helpers/mock-kv";
 import { mockOAuthFlow } from "./helpers/mock-oauth-flow";
 import { runInTempDir } from "./helpers/run-in-tmp";
@@ -27,11 +28,13 @@ describe("publish", () => {
   mockAccountId();
   mockApiToken();
   runInTempDir({ homedir: "./home" });
+  const { setIsTTY } = useMockIsTTY();
   const std = mockConsoleMethods();
   const {
     mockOAuthServerCallback,
     mockGrantAccessToken,
     mockGrantAuthorization,
+    mockGetMemberships,
   } = mockOAuthFlow();
 
   beforeEach(() => {
@@ -39,6 +42,7 @@ describe("publish", () => {
     jest.spyOn(global, "setTimeout").mockImplementation((fn, _period) => {
       setImmediate(fn);
     });
+    setIsTTY(true);
   });
 
   afterEach(() => {
@@ -56,6 +60,7 @@ describe("publish", () => {
     });
 
     it("drops a user into the login flow if they're unauthenticated", async () => {
+      // Should not throw missing Errors in TTY environment
       writeWranglerToml();
       writeWorkerSource();
       mockSubDomainRequest();
@@ -115,6 +120,128 @@ describe("publish", () => {
         "
       `);
       expect(std.err).toMatchInlineSnapshot(`""`);
+    });
+
+    describe("non-TTY", () => {
+      const ENV_COPY = process.env;
+
+      afterEach(() => {
+        process.env = ENV_COPY;
+        unsetAllMocks();
+      });
+
+      it("should not throw an error in non-TTY if 'CLOUDFLARE_API_TOKEN' & 'account_id' are in scope", async () => {
+        process.env = {
+          CLOUDFLARE_API_TOKEN: "123456789",
+        };
+        setIsTTY(false);
+        writeWranglerToml({
+          account_id: "some-account-id",
+        });
+        writeWorkerSource();
+        mockSubDomainRequest();
+        mockUploadWorkerRequest();
+        mockOAuthServerCallback();
+
+        await runWrangler("publish index.js");
+
+        expect(std.out).toMatchInlineSnapshot(`
+          "Uploaded test-name (TIMINGS)
+          Published test-name (TIMINGS)
+            test-name.test-sub-domain.workers.dev"
+        `);
+        expect(std.err).toMatchInlineSnapshot(`""`);
+      });
+
+      it("should not throw an error if 'CLOUDFLARE_ACCOUNT_ID' & 'CLOUDFLARE_API_TOKEN' are in scope", async () => {
+        process.env = {
+          CLOUDFLARE_API_TOKEN: "hunter2",
+          CLOUDFLARE_ACCOUNT_ID: "some-account-id",
+        };
+        setIsTTY(false);
+        writeWranglerToml();
+        writeWorkerSource();
+        mockSubDomainRequest();
+        mockUploadWorkerRequest();
+        mockOAuthServerCallback();
+        mockGetMemberships({
+          success: true,
+          result: [],
+        });
+
+        await runWrangler("publish index.js");
+
+        expect(std.out).toMatchInlineSnapshot(`
+          "Uploaded test-name (TIMINGS)
+          Published test-name (TIMINGS)
+            test-name.test-sub-domain.workers.dev"
+        `);
+        expect(std.err).toMatchInlineSnapshot(`""`);
+      });
+
+      it("should throw an error in non-TTY if 'account_id' & 'CLOUDFLARE_ACCOUNT_ID' is missing", async () => {
+        setIsTTY(false);
+        process.env = {
+          CLOUDFLARE_API_TOKEN: "hunter2",
+          CLOUDFLARE_ACCOUNT_ID: undefined,
+        };
+        writeWranglerToml({
+          account_id: undefined,
+        });
+        writeWorkerSource();
+        mockSubDomainRequest();
+        mockUploadWorkerRequest();
+        mockOAuthServerCallback();
+        mockGetMemberships({
+          success: true,
+          result: [
+            { id: "IG-88", account: { id: "1701", name: "enterprise" } },
+            { id: "R2-D2", account: { id: "nx01", name: "enterprise-nx" } },
+          ],
+        });
+
+        await expect(runWrangler("publish index.js")).rejects
+          .toMatchInlineSnapshot(`
+                [Error: More than one account available but unable to select one in non-interactive mode.
+                Please set the appropriate \`account_id\` in your \`wrangler.toml\` file.
+                Available accounts are ("<name>" - "<id>"):
+                  "enterprise" - "1701")
+                  "enterprise-nx" - "nx01")]
+              `);
+      });
+
+      it("should throw error in non-TTY if 'CLOUDFLARE_API_TOKEN' is missing", async () => {
+        setIsTTY(false);
+        writeWranglerToml({
+          account_id: undefined,
+        });
+        process.env = {
+          CLOUDFLARE_API_TOKEN: undefined,
+          CLOUDFLARE_ACCOUNT_ID: "badwolf",
+        };
+        writeWorkerSource();
+        mockSubDomainRequest();
+        mockUploadWorkerRequest();
+        mockOAuthServerCallback();
+        mockGetMemberships({
+          success: true,
+          result: [
+            { id: "IG-88", account: { id: "1701", name: "enterprise" } },
+            { id: "R2-D2", account: { id: "nx01", name: "enterprise-nx" } },
+          ],
+        });
+
+        await expect(runWrangler("publish index.js")).rejects.toThrowError();
+
+        expect(std.err).toMatchInlineSnapshot(`
+          "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mMissing 'CLOUDFLARE_API_TOKEN' from non-TTY environment, please see docs for more info: TBD[0m
+
+
+          [31mX [41;31m[[41;97mERROR[41;31m][0m [1mDid not login, quitting...[0m
+
+          "
+        `);
+      });
     });
   });
 
@@ -2389,7 +2516,7 @@ export default{
         `export class SomeClass{}; export class SomeOtherClass{}; export default {};`
       );
       mockSubDomainRequest();
-      mockLegacyScriptData({ scripts: [] }); // no previously uploaded scripts at all
+      mockScriptData({ scripts: [] }); // no previously uploaded scripts at all
       mockUploadWorkerRequest({
         expectedMigrations: {
           new_tag: "v2",
@@ -2428,9 +2555,7 @@ export default{
         `export class SomeClass{}; export class SomeOtherClass{}; export default {};`
       );
       mockSubDomainRequest();
-      mockLegacyScriptData({
-        scripts: [{ id: "test-name", migration_tag: "v1" }],
-      });
+      mockScriptData({ scripts: [{ id: "test-name", migration_tag: "v1" }] });
       mockUploadWorkerRequest({
         expectedMigrations: {
           old_tag: "v1",
@@ -2475,9 +2600,7 @@ export default{
         `export class SomeClass{}; export class SomeOtherClass{}; export class YetAnotherClass{}; export default {};`
       );
       mockSubDomainRequest();
-      mockLegacyScriptData({
-        scripts: [{ id: "test-name", migration_tag: "v3" }],
-      });
+      mockScriptData({ scripts: [{ id: "test-name", migration_tag: "v3" }] });
       mockUploadWorkerRequest({
         expectedMigrations: undefined,
       });
@@ -2496,7 +2619,7 @@ export default{
     });
 
     describe("service environments", () => {
-      it("should publish all migrations on first publish", async () => {
+      it("should error when using service environments + durable objects", async () => {
         writeWranglerToml({
           durable_objects: {
             bindings: [
@@ -2504,200 +2627,28 @@ export default{
               { name: "SOMEOTHERNAME", class_name: "SomeOtherClass" },
             ],
           },
-          migrations: [
-            { tag: "v1", new_classes: ["SomeClass"] },
-            { tag: "v2", new_classes: ["SomeOtherClass"] },
-          ],
+          migrations: [{ tag: "v1", new_classes: ["SomeClass"] }],
         });
         fs.writeFileSync(
           "index.js",
           `export class SomeClass{}; export class SomeOtherClass{}; export default {};`
         );
+
         mockSubDomainRequest();
-        mockServiceScriptData({}); // no scripts at all
-        mockUploadWorkerRequest({
-          legacyEnv: false,
-          expectedMigrations: {
-            new_tag: "v2",
-            steps: [
-              { new_classes: ["SomeClass"] },
-              { new_classes: ["SomeOtherClass"] },
-            ],
-          },
-        });
 
-        await runWrangler("publish index.js --legacy-env false");
-        expect(std.out).toMatchInlineSnapshot(`
-          "Uploaded test-name (TIMINGS)
-          Published test-name (TIMINGS)
-            test-name.test-sub-domain.workers.dev"
-        `);
-        expect(std.err).toMatchInlineSnapshot(`""`);
-        expect(std.warn).toMatchInlineSnapshot(`
-          "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mService environments are in beta, and their behaviour is guaranteed to change in the future. DO NOT USE IN PRODUCTION.[0m
-
-          "
-        `);
-      });
-
-      it("should publish all migrations on first publish (--env)", async () => {
-        writeWranglerToml({
-          durable_objects: {
-            bindings: [
-              { name: "SOMENAME", class_name: "SomeClass" },
-              { name: "SOMEOTHERNAME", class_name: "SomeOtherClass" },
-            ],
-          },
-          env: {
-            xyz: {
-              durable_objects: {
-                bindings: [
-                  { name: "SOMENAME", class_name: "SomeClass" },
-                  { name: "SOMEOTHERNAME", class_name: "SomeOtherClass" },
-                ],
-              },
-            },
-          },
-          migrations: [
-            { tag: "v1", new_classes: ["SomeClass"] },
-            { tag: "v2", new_classes: ["SomeOtherClass"] },
-          ],
-        });
-        fs.writeFileSync(
-          "index.js",
-          `export class SomeClass{}; export class SomeOtherClass{}; export default {};`
+        await expect(
+          runWrangler("publish index.js --legacy-env false")
+        ).rejects.toThrowErrorMatchingInlineSnapshot(
+          `"Publishing Durable Objects to a service environment is not currently supported. This is being tracked at https://github.com/cloudflare/wrangler2/issues/739"`
         );
-        mockSubDomainRequest();
-        mockServiceScriptData({ env: "xyz" }); // no scripts at all
-        mockUploadWorkerRequest({
-          legacyEnv: false,
-          env: "xyz",
-          expectedMigrations: {
-            new_tag: "v2",
-            steps: [
-              { new_classes: ["SomeClass"] },
-              { new_classes: ["SomeOtherClass"] },
-            ],
-          },
-        });
-
-        await runWrangler("publish index.js --legacy-env false --env xyz");
-        expect(std.out).toMatchInlineSnapshot(`
-          "Uploaded test-name (xyz) (TIMINGS)
-          Published test-name (xyz) (TIMINGS)
-            xyz.test-name.test-sub-domain.workers.dev"
-        `);
-        expect(std.err).toMatchInlineSnapshot(`""`);
-        expect(std.warn).toMatchInlineSnapshot(`
-          "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mService environments are in beta, and their behaviour is guaranteed to change in the future. DO NOT USE IN PRODUCTION.[0m
-
-          "
-        `);
-      });
-
-      it("should use a script's current migration tag when publishing migrations", async () => {
-        writeWranglerToml({
-          durable_objects: {
-            bindings: [
-              { name: "SOMENAME", class_name: "SomeClass" },
-              { name: "SOMEOTHERNAME", class_name: "SomeOtherClass" },
-            ],
-          },
-          migrations: [
-            { tag: "v1", new_classes: ["SomeClass"] },
-            { tag: "v2", new_classes: ["SomeOtherClass"] },
-          ],
-        });
-        fs.writeFileSync(
-          "index.js",
-          `export class SomeClass{}; export class SomeOtherClass{}; export default {};`
-        );
-        mockSubDomainRequest();
-        mockServiceScriptData({
-          script: { id: "test-name", migration_tag: "v1" },
-        });
-        mockUploadWorkerRequest({
-          legacyEnv: false,
-          expectedMigrations: {
-            old_tag: "v1",
-            new_tag: "v2",
-            steps: [
-              {
-                new_classes: ["SomeOtherClass"],
-              },
-            ],
-          },
-        });
-
-        await runWrangler("publish index.js --legacy-env false");
         expect(std).toMatchInlineSnapshot(`
           Object {
             "debug": "",
-            "err": "",
-            "out": "Uploaded test-name (TIMINGS)
-          Published test-name (TIMINGS)
-            test-name.test-sub-domain.workers.dev",
-            "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mService environments are in beta, and their behaviour is guaranteed to change in the future. DO NOT USE IN PRODUCTION.[0m
+            "err": "[31mX [41;31m[[41;97mERROR[41;31m][0m [1mPublishing Durable Objects to a service environment is not currently supported. This is being tracked at https://github.com/cloudflare/wrangler2/issues/739[0m
 
           ",
-          }
-        `);
-      });
-
-      it("should use an environment's current migration tag when publishing migrations", async () => {
-        writeWranglerToml({
-          durable_objects: {
-            bindings: [
-              { name: "SOMENAME", class_name: "SomeClass" },
-              { name: "SOMEOTHERNAME", class_name: "SomeOtherClass" },
-            ],
-          },
-          env: {
-            xyz: {
-              durable_objects: {
-                bindings: [
-                  { name: "SOMENAME", class_name: "SomeClass" },
-                  { name: "SOMEOTHERNAME", class_name: "SomeOtherClass" },
-                ],
-              },
-            },
-          },
-          migrations: [
-            { tag: "v1", new_classes: ["SomeClass"] },
-            { tag: "v2", new_classes: ["SomeOtherClass"] },
-          ],
-        });
-        fs.writeFileSync(
-          "index.js",
-          `export class SomeClass{}; export class SomeOtherClass{}; export default {};`
-        );
-        mockSubDomainRequest();
-        mockServiceScriptData({
-          script: { id: "test-name", migration_tag: "v1" },
-          env: "xyz",
-        });
-        mockUploadWorkerRequest({
-          legacyEnv: false,
-          env: "xyz",
-          expectedMigrations: {
-            old_tag: "v1",
-            new_tag: "v2",
-            steps: [
-              {
-                new_classes: ["SomeOtherClass"],
-              },
-            ],
-          },
-        });
-
-        await runWrangler("publish index.js --legacy-env false --env xyz");
-        expect(std).toMatchInlineSnapshot(`
-          Object {
-            "debug": "",
-            "err": "",
-            "out": "Uploaded test-name (xyz) (TIMINGS)
-          Published test-name (xyz) (TIMINGS)
-            xyz.test-name.test-sub-domain.workers.dev",
+            "out": "
+          [32mIf you think this is a bug then please create an issue at https://github.com/cloudflare/wrangler2/issues/new.[0m",
             "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mService environments are in beta, and their behaviour is guaranteed to change in the future. DO NOT USE IN PRODUCTION.[0m
 
           ",
@@ -2850,7 +2801,7 @@ export default{
         ],
       });
       mockSubDomainRequest();
-      mockLegacyScriptData({ scripts: [] });
+      mockScriptData({ scripts: [] });
 
       await expect(runWrangler("publish index.js")).resolves.toBeUndefined();
       expect(std.out).toMatchInlineSnapshot(`
@@ -3610,9 +3561,7 @@ export default{
           `export class ExampleDurableObject {}; export default{};`
         );
         mockSubDomainRequest();
-        mockLegacyScriptData({
-          scripts: [{ id: "test-name", migration_tag: "v1" }],
-        });
+        mockScriptData({ scripts: [{ id: "test-name", migration_tag: "v1" }] });
         mockUploadWorkerRequest({
           expectedBindings: [
             {
@@ -3686,9 +3635,7 @@ export default{
           `export class ExampleDurableObject {}; export default{};`
         );
         mockSubDomainRequest();
-        mockLegacyScriptData({
-          scripts: [{ id: "test-name", migration_tag: "v1" }],
-        });
+        mockScriptData({ scripts: [{ id: "test-name", migration_tag: "v1" }] });
         mockUploadWorkerRequest({
           expectedType: "esm",
           expectedBindings: [
@@ -4244,47 +4191,6 @@ export default{
       `);
     });
   });
-
-  describe("--node-compat", () => {
-    it("should warn when using node compatibility mode", async () => {
-      writeWranglerToml();
-      writeWorkerSource();
-      await runWrangler("publish index.js --node-compat --dry-run");
-      expect(std).toMatchInlineSnapshot(`
-        Object {
-          "debug": "",
-          "err": "",
-          "out": "--dry-run: exiting now.",
-          "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mEnabling node.js compatibility mode for builtins and globals. This is experimental and has serious tradeoffs. Please see https://github.com/ionic-team/rollup-plugin-node-polyfills/ for more details.[0m
-
-        ",
-        }
-      `);
-    });
-
-    it("should polyfill node builtins when enabled", async () => {
-      writeWranglerToml();
-      fs.writeFileSync(
-        "index.js",
-        `
-      import path from 'path';
-      console.log(path.join("some/path/to", "a/file.txt"));
-      export default {}
-      `
-      );
-      await runWrangler("publish index.js --node-compat --dry-run"); // this would throw if node compatibility didn't exist
-      expect(std).toMatchInlineSnapshot(`
-        Object {
-          "debug": "",
-          "err": "",
-          "out": "--dry-run: exiting now.",
-          "warn": "[33m▲ [43;33m[[43;30mWARNING[43;33m][0m [1mEnabling node.js compatibility mode for builtins and globals. This is experimental and has serious tradeoffs. Please see https://github.com/ionic-team/rollup-plugin-node-polyfills/ for more details.[0m
-
-        ",
-        }
-      `);
-    });
-  });
 });
 
 /** Write mock assets to the file system so they can be uploaded. */
@@ -4533,7 +4439,7 @@ function mockDeleteUnusedAssetsRequest(
 
 type LegacyScriptInfo = { id: string; migration_tag?: string };
 
-function mockLegacyScriptData(options: { scripts: LegacyScriptInfo[] }) {
+function mockScriptData(options: { scripts: LegacyScriptInfo[] }) {
   const { scripts } = options;
   setMockResponse(
     "/accounts/:accountId/workers/scripts",
@@ -4543,60 +4449,4 @@ function mockLegacyScriptData(options: { scripts: LegacyScriptInfo[] }) {
       return scripts;
     }
   );
-}
-
-type DurableScriptInfo = { id: string; migration_tag?: string };
-
-function mockServiceScriptData(options: {
-  script?: DurableScriptInfo;
-  scriptName?: string;
-  env?: string;
-}) {
-  const { script } = options;
-  if (options.env) {
-    if (!script) {
-      setMockRawResponse(
-        "/accounts/:accountId/workers/services/:scriptName/environments/:envName",
-        "GET",
-        () => {
-          return createFetchResult(null, false, [
-            { code: 10092, message: "workers.api.error.environment_not_found" },
-          ]);
-        }
-      );
-      return;
-    }
-    setMockResponse(
-      "/accounts/:accountId/workers/services/:scriptName/environments/:envName",
-      "GET",
-      ([_url, accountId, scriptName, envName]) => {
-        expect(accountId).toEqual("some-account-id");
-        expect(scriptName).toEqual(options.scriptName || "test-name");
-        expect(envName).toEqual(options.env);
-        return { script };
-      }
-    );
-  } else {
-    if (!script) {
-      setMockRawResponse(
-        "/accounts/:accountId/workers/services/:scriptName",
-        "GET",
-        () => {
-          return createFetchResult(null, false, [
-            { code: 10090, message: "workers.api.error.service_not_found" },
-          ]);
-        }
-      );
-      return;
-    }
-    setMockResponse(
-      "/accounts/:accountId/workers/services/:scriptName",
-      "GET",
-      ([_url, accountId, scriptName]) => {
-        expect(accountId).toEqual("some-account-id");
-        expect(scriptName).toEqual(options.scriptName || "test-name");
-        return { default_environment: { script } };
-      }
-    );
-  }
 }
