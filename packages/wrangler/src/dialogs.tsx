@@ -61,7 +61,10 @@ function Prompt(props: PromptProps) {
   );
 }
 
-export async function prompt(text: string, type: "text" | "password" = "text") {
+export async function prompt(
+  text: string,
+  type: "text" | "password" = "text"
+): Promise<string> {
   return new Promise((resolve) => {
     const { unmount } = render(
       <Prompt

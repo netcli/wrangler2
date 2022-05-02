@@ -10,6 +10,7 @@ import { URL } from "node:url";
 import { hash } from "blake3-wasm";
 import { watch } from "chokidar";
 import { render, Text } from "ink";
+import SelectInput from "ink-select-input";
 import Spinner from "ink-spinner";
 import Table from "ink-table";
 import { getType } from "mime";
@@ -22,7 +23,8 @@ import { buildWorker } from "../pages/functions/buildWorker";
 import { generateConfigFromFileTree } from "../pages/functions/filepath-routing";
 import { writeRoutesModule } from "../pages/functions/routes";
 import { fetchResult } from "./cfetch";
-import { readConfig } from "./config";
+import { getConfigCache, saveToConfigCache } from "./config-cache";
+import { prompt } from "./dialogs";
 import { FatalError } from "./errors";
 import openInBrowser from "./open-in-browser";
 import { toUrlPath } from "./paths";
@@ -32,9 +34,6 @@ import type { Headers, Request, fetch } from "@miniflare/core";
 import type { BuildResult } from "esbuild";
 import type { MiniflareOptions } from "miniflare";
 import type { BuilderCallback, CommandModule } from "yargs";
-import { getConfigCache, saveToConfigCache } from "./config-cache";
-
-type ConfigPath = string | undefined;
 
 export type Project = {
   name: string;
@@ -846,10 +845,69 @@ const createDeployment: CommandModule<
 
     projectName ??= config.project_name;
 
+    if (!projectName && isInteractive) {
+      const existingOrNew = await new Promise<"new" | "existing">((resolve) => {
+        const { unmount } = render(
+          <>
+            <Text>
+              No project selected. Would you like to create one or use an
+              existing project?
+            </Text>
+            <SelectInput
+              items={[
+                {
+                  key: "new",
+                  label: "Create a new project",
+                  value: "new",
+                },
+                {
+                  key: "existing",
+                  label: "Use an existing project",
+                  value: "existing",
+                },
+              ]}
+              onSelect={async (selected) => {
+                resolve(selected.value as "new" | "existing");
+                unmount();
+              }}
+            />
+          </>
+        );
+      });
+
+      switch (existingOrNew) {
+        case "existing": {
+          const projects = await listProjects({ accountId });
+          projectName = await new Promise((resolve) => {
+            const { unmount } = render(
+              <>
+                <Text>Select a project:</Text>
+                <SelectInput
+                  items={projects.map((project) => ({
+                    key: project.name,
+                    label: project.name,
+                    value: project,
+                  }))}
+                  onSelect={async (selected) => {
+                    resolve(selected.value.name);
+                    unmount();
+                  }}
+                />
+              </>
+            );
+          });
+          break;
+        }
+        case "new": {
+          projectName = await prompt("Enter the name of your new project:");
+          break;
+        }
+      }
+    }
+
     if (!projectName) {
       throw new FatalError("Must specify a project name.", 1);
     }
-    // TODO: Project picker #821
 
     // We infer git info by default is not passed in
 
@@ -1110,13 +1168,14 @@ const createDeployment: CommandModule<
       formData.append("_worker.js", new File([_workerJS], "_worker.js"));
     }
 
-    const deploymentResponse = await fetchResult<Deployment>(
-      `/accounts/${accountId}/pages/projects/${projectName}/deployment`,
-      {
-        method: "POST",
-        body: formData,
-      }
-    );
+    // const deploymentResponse = await fetchResult<Deployment>(
+    //   `/accounts/${accountId}/pages/projects/${projectName}/deployment`,
+    //   {
+    //     method: "POST",
+    //     body: formData,
+    //   }
+    // );
+    const deploymentResponse = { url: "https://<URL HERE>.pages.dev/" };
 
     saveToConfigCache<PagesConfigCache>(PAGES_CONFIG_CACHE_FILENAME, {
       account_id: accountId,
@@ -1546,6 +1605,10 @@ export const pages: BuilderCallback<unknown, unknown> = (yargs) => {
             const isInteractive = process.stdin.isTTY;
             const accountId = await requireAuth(config, isInteractive);
 
+            if (!projectName && isInteractive) {
+              projectName = await prompt("Enter the name of your new project:");
+            }
+
             if (!projectName) {
               throw new FatalError("Must specify a project name.", 1);
             }
@@ -1603,6 +1666,28 @@ export const pages: BuilderCallback<unknown, unknown> = (yargs) => {
 
               projectName ??= config.project_name;
 
+              if (!projectName && isInteractive) {
+                const projects = await listProjects({ accountId });
+                projectName = await new Promise((resolve) => {
+                  const { unmount } = render(
+                    <>
+                      <Text>Select a project:</Text>
+                      <SelectInput
+                        items={projects.map((project) => ({
+                          key: project.name,
+                          label: project.name,
+                          value: project,
+                        }))}
+                        onSelect={async (selected) => {
+                          resolve(selected.value.name);
+                          unmount();
+                        }}
+                      />
+                    </>
+                  );
+                });
+              }
+
               if (!projectName) {
                 throw new FatalError("Must specify a project name.", 1);
               }
@@ -1640,7 +1725,6 @@ export const pages: BuilderCallback<unknown, unknown> = (yargs) => {
 
               saveToConfigCache<PagesConfigCache>(PAGES_CONFIG_CACHE_FILENAME, {
                 account_id: accountId,
-                project_name: projectName,
               });
 
               render(<Table data={data}></Table>);
