@@ -337,10 +337,10 @@ export function validateScopeKeys(
 }
 
 const CLIENT_ID = "54d11594-84e4-41aa-b438-e81b8fa78ee7";
-const AUTH_URL = "https://dash.staging.cloudflare.com/oauth2/auth";
-const TOKEN_URL = "https://dash.staging.cloudflare.com/oauth2/token";
+const AUTH_URL = "https://dash.cloudflare.com/oauth2/auth";
+const TOKEN_URL = "https://dash.cloudflare.com/oauth2/token";
 const CALLBACK_URL = "http://localhost:8976/oauth/callback";
-const REVOKE_URL = "https://dash.staging.cloudflare.com/oauth2/revoke";
+const REVOKE_URL = "https://dash.cloudflare.com/oauth2/revoke";
 
 let LocalState: State = getAuthTokens();
 
