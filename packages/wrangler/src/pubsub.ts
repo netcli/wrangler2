@@ -103,7 +103,7 @@ export async function createBroker(
 /**
  * Create a namespace
  */
-export async function updateBroker( 
+export async function updateBroker(
   accountId: string,
   namespace: string,
   broker: string,

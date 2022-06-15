@@ -12,7 +12,7 @@ import type { RequestInit, HeadersInit } from "undici";
 export const getCloudflareAPIBaseURL = getEnvironmentVariableFactory({
   variableName: "CLOUDFLARE_API_BASE_URL",
   deprecatedName: "CF_API_BASE_URL",
-  defaultValue: "https://api.staging.cloudflare.com/client/v4",
+  defaultValue: "https://api.cloudflare.com/client/v4",
 });
 
 /**
