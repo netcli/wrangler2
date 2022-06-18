@@ -2435,8 +2435,9 @@ export async function main(argv: string[]): Promise<void> {
                     "Time to allow token validity (can use seconds, hours, months, weeks, years)",
                   type: "string",
                 })
-                .option("on_publish_url", {
-                  describe: "Webhook to call upon publishing messages",
+                .option("on-publish-url", {
+                  describe:
+                    "A (HTTPS) Cloudflare Worker (or webhook) URL that messages will be sent to on-publish.",
                   type: "string",
                 }),
             async (args) => {
@@ -2459,9 +2460,9 @@ export async function main(argv: string[]): Promise<void> {
                 }
                 broker.expiration = expiration;
               }
-              if (args.on_publish) {
+              if (args["on-publish-url"]) {
                 broker.on_publish = {
-                  url: args.on_publish_url,
+                  url: args["on_publish_url"],
                 };
               }
               logger.log(
@@ -2499,7 +2500,7 @@ export async function main(argv: string[]): Promise<void> {
                     "The expiration date for all client credentials issued by the Broker (can use seconds, hours, months, weeks, years)",
                   type: "string",
                 })
-                .option("on_publish_url", {
+                .option("on-publish-url", {
                   describe:
                     "A (HTTPS) Cloudflare Worker (or webhook) URL that messages will be sent to on-publish.",
                   type: "string",
@@ -2521,9 +2522,9 @@ export async function main(argv: string[]): Promise<void> {
                 }
                 broker.expiration = expiration;
               }
-              if (args.on_publish) {
+              if (args["on-publish-url"]) {
                 broker.on_publish = {
-                  url: args.on_publish_url,
+                  url: args["on-publish-url"],
                 };
               }
               logger.log(
